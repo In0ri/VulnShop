@@ -1,0 +1,12 @@
+{
+  "name": "vuln-shop-lab",
+  "version": "1.0.0",
+  "description": "Intentionally vulnerable e-commerce app for AuthN/AuthZ pentest training. NOT for production.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

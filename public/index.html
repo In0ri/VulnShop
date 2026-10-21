@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VulnShop — Gadgets & More</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="lab-banner">⚠️ INTENTIONALLY VULNERABLE TRAINING LAB — AuthN/AuthZ practice only. Do not deploy publicly.</div>
+
+<header>
+  <div class="container nav">
+    <div class="logo"><span class="dot"></span> VulnShop</div>
+    <nav class="links">
+      <a href="#" data-route="home">Store</a>
+      <a href="#" data-route="orders">My Orders</a>
+      <a href="#" data-route="account">Account</a>
+      <a href="#" data-route="admin" id="adminLink" style="display:none">Admin</a>
+    </nav>
+    <div class="search"><input id="searchInput" placeholder="Search products…"></div>
+    <div class="actions">
+      <button class="icon-btn" id="cartBtn">🛒<span class="badge" id="cartBadge">0</span></button>
+      <span id="userBox"></span>
+    </div>
+  </div>
+</header>
+
+<main class="container" id="view"></main>
+
+<!-- cart drawer -->
+<div class="drawer-bg" id="drawerBg"></div>
+<aside class="drawer" id="drawer">
+  <div class="head"><strong>Your Cart</strong><button class="icon-btn" id="closeCart">✕</button></div>
+  <div class="items" id="cartItems"></div>
+  <div class="foot">
+    <div class="field" style="margin-bottom:10px">
+      <div style="display:flex;gap:8px">
+        <input id="couponInput" placeholder="Coupon code" style="flex:1;padding:9px 12px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+        <button class="btn sm" id="applyCoupon">Apply</button>
+      </div>
+      <div class="hint" id="couponHint"></div>
+    </div>
+    <div class="line"><span>Subtotal</span><span id="subTotal">$0.00</span></div>
+    <div class="line"><span>Discount</span><span id="discount">-$0.00</span></div>
+    <div class="line total"><span>Total</span><span id="grandTotal">$0.00</span></div>
+    <button class="btn block" id="checkoutBtn" style="margin-top:12px">Checkout</button>
+  </div>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<footer><div class="container">VulnShop Lab · built for authorized security training · no real purchases are processed</div></footer>
+
+<script src="app.js"></script>
+</body>
+</html>
