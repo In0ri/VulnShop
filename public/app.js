@@ -4,7 +4,6 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const money = (n) => '$' + Number(n || 0).toFixed(2);
 const view = $('#view');
 
-// VULN (client-side): token kept in localStorage, readable by any script (XSS -> theft).
 let token = localStorage.getItem('token') || null;
 let me = JSON.parse(localStorage.getItem('me') || 'null');
 let products = [];
@@ -47,8 +46,6 @@ function renderUserBox() {
     box.innerHTML = `<span class="muted" style="margin-right:10px">Hi, <b>${me.username}</b></span>
       <button class="btn ghost sm" id="logoutBtn">Logout</button>`;
     $('#logoutBtn').onclick = logout;
-    // VULN (client-side authz): the Admin link is merely hidden for non-admins.
-    // The server does not actually protect the admin APIs (see README).
     $('#adminLink').style.display = me.role === 'admin' ? 'inline-block' : 'none';
   } else {
     box.innerHTML = `<button class="btn sm" data-route="login" id="loginBtn">Sign in</button>`;
@@ -172,7 +169,7 @@ function renderAuth() {
     try {
       const d = await api('/login', { method: 'POST', body: JSON.stringify({ username: $('#li_u').value, password: $('#li_p').value }) });
       setSession(d); toast('Welcome back, ' + d.user.username, 'ok'); go('home');
-    } catch (e) { toast(e.message, 'err'); } // VULN: distinct errors enable user enumeration
+    } catch (e) { toast(e.message, 'err'); }
   };
   $('#doReg').onclick = async () => {
     try {
@@ -199,7 +196,7 @@ function renderForgot() {
     try {
       const d = await api('/forgot-password', { method: 'POST', body: JSON.stringify({ email: $('#fp_e').value }) });
       $('#fp_step2').classList.remove('hide');
-      $('#fp_t').value = d.resetToken; // VULN: token handed straight to the client
+      $('#fp_t').value = d.resetToken;
       toast('Reset token issued (shown below)', 'ok');
     } catch (e) { toast(e.message, 'err'); }
   };
@@ -218,7 +215,7 @@ function setSession(d) {
 
 async function renderAccount() {
   if (!me) return go('login');
-  const u = await api('/users/' + me.id);
+  const u = await api('/account');
   if (!onRoute('account')) return;
   view.innerHTML = `
   <div class="panel">
@@ -239,18 +236,23 @@ async function renderAccount() {
   </div>
   <div class="panel">
     <h3>Change password</h3>
+    <div class="field"><label>Current password</label><input id="ac_cp" type="password"></div>
     <div class="field"><label>New password</label><input id="ac_np" type="password"></div>
     <button class="btn ghost" id="ac_pw">Update password</button>
   </div>`;
   $('#ac_save').onclick = async () => {
-    // VULN (combined with server): PUT /users/:id allows role/balance tampering.
-    await api('/users/' + me.id, { method: 'PUT', body: JSON.stringify({
-      fullName: $('#ac_n').value, email: $('#ac_e').value, phone: $('#ac_ph').value, address: $('#ac_a').value }) });
-    toast('Profile saved', 'ok');
+    try {
+      await api('/account', { method: 'PATCH', body: JSON.stringify({
+        fullName: $('#ac_n').value, email: $('#ac_e').value, phone: $('#ac_ph').value, address: $('#ac_a').value }) });
+      toast('Profile saved', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
   };
   $('#ac_pw').onclick = async () => {
-    await api('/users/' + me.id + '/change-password', { method: 'POST', body: JSON.stringify({ newPassword: $('#ac_np').value }) });
-    toast('Password changed', 'ok');
+    try {
+      await api('/account/password', { method: 'POST', body: JSON.stringify({
+        currentPassword: $('#ac_cp').value, newPassword: $('#ac_np').value }) });
+      toast('Password changed', 'ok'); $('#ac_cp').value = ''; $('#ac_np').value = '';
+    } catch (e) { toast(e.message, 'err'); }
   };
 }
 
@@ -270,14 +272,6 @@ async function renderOrders() {
       <td><button class="btn ghost sm inv" data-id="${o.id}">View invoice</button></td>
     </tr>`).join('')}</tbody></table>`
     : '<p class="muted">No orders yet — go buy something!</p>'}
-  </div>
-  <div class="panel">
-    <h3>Look up an invoice</h3>
-    <p class="muted" style="margin-top:0">Enter any order number to view its invoice.</p>
-    <div style="display:flex;gap:10px">
-      <input id="invId" class="inline-input" style="width:140px" placeholder="e.g. 5001" value="5001">
-      <button class="btn sm" id="invLookup">Open invoice</button>
-    </div>
   </div>`;
   const openInvoice = async (id) => {
     try {
@@ -297,18 +291,12 @@ async function renderOrders() {
     } catch (e) { toast(e.message, 'err'); }
   };
   $$('.inv').forEach(b => b.onclick = () => openInvoice(b.dataset.id));
-  $('#invLookup').onclick = () => openInvoice($('#invId').value);
 }
 
-// VULN (client-side): this page is not gated server-side. Anyone who forces
-// #admin can load it; every API below returns data via a bypass, no real role.
 let adminTab = 'overview';
 async function renderAdmin() {
   view.innerHTML = `
     <div class="section-title"><h2>Admin dashboard</h2><span class="muted">internal tools</span></div>
-    <div class="danger-note">⚠️ Lab note: these admin APIs do <b>not</b> verify your real role.
-      The page is reachable by forcing <code>#admin</code>, and data loads through bypasses
-      (<code>X-Admin: true</code> header, <code>?debug=1</code>). This is the broken-access-control surface.</div>
     <div class="atabs">
       <button data-tab="overview">Overview</button>
       <button data-tab="users">Users</button>
@@ -330,7 +318,7 @@ async function renderAdmin() {
   }
 }
 async function adminOverview() {
-  const stats = await api('/admin/stats', { headers: { 'X-Admin': 'true' } });
+  const stats = await api('/admin/stats');
   if (!onRoute('admin')) return;
   $('#adminBody').innerHTML = `
     <div class="stat-row">
@@ -338,31 +326,27 @@ async function adminOverview() {
       <div class="stat"><div class="lbl">Orders</div><div class="val">${stats.orders}</div></div>
       <div class="stat"><div class="lbl">Users</div><div class="val">${stats.users}</div></div>
       <div class="stat"><div class="lbl">Products</div><div class="val">${stats.products}</div></div>
-    </div>
-    <p class="muted" style="margin-top:16px">Loaded via <code>GET /api/admin/stats</code> with header
-      <code>X-Admin: true</code> — no login token required.</p>`;
+    </div>`;
 }
 async function adminUsers() {
-  const users = await api('/admin/users?debug=1');
+  const users = await api('/admin/users');
   if (!onRoute('admin')) return;
   $('#adminBody').innerHTML = `
-    <p class="muted" style="margin-top:0">From <code>GET /api/admin/users?debug=1</code> — note it also leaks <b>plaintext passwords</b>. Change any role/balance and Save.</p>
-    <table><thead><tr><th>ID</th><th>User</th><th>Email</th><th>Password</th><th>Role</th><th>Balance</th><th>Actions</th></tr></thead>
+    <table><thead><tr><th>ID</th><th>User</th><th>Email</th><th>Role</th><th>Balance</th><th>Actions</th></tr></thead>
     <tbody>${users.map(u => `<tr>
       <td>${u.id}</td><td>${u.username}</td><td>${u.email}</td>
-      <td><code>${u.password}</code></td>
       <td><select class="inline-input urole" data-id="${u.id}">
         ${['user', 'manager', 'admin'].map(r => `<option ${u.role === r ? 'selected' : ''}>${r}</option>`).join('')}
       </select></td>
-      <td><input class="inline-input ubal" data-id="${u.id}" value="${u.balance}"></td>
+      <td>${money(u.balance)}</td>
       <td style="white-space:nowrap">
-        <button class="btn sm usave" data-id="${u.id}">Save</button>
+        <button class="btn sm usave" data-id="${u.id}">Save role</button>
         <button class="btn danger sm udel" data-id="${u.id}">Delete</button>
       </td></tr>`).join('')}</tbody></table>`;
   $$('.usave').forEach(b => b.onclick = async () => {
     const id = b.dataset.id;
-    await api('/users/' + id, { method: 'PUT', body: JSON.stringify({
-      role: $(`.urole[data-id="${id}"]`).value, balance: Number($(`.ubal[data-id="${id}"]`).value) }) });
+    await api('/admin/users/' + id + '/role', { method: 'POST', body: JSON.stringify({
+      role: $(`.urole[data-id="${id}"]`).value }) });
     toast('User ' + id + ' updated', 'ok'); renderAdmin();
   });
   $$('.udel').forEach(b => b.onclick = async () => {
@@ -374,7 +358,6 @@ async function adminProducts() {
   const list = await api('/products');
   if (!onRoute('admin')) return;
   $('#adminBody').innerHTML = `
-    <p class="muted" style="margin-top:0">Create / edit / delete via <code>/api/products</code> — no auth required at all.</p>
     <table><thead><tr><th>ID</th><th>Name</th><th>Price</th><th>Stock</th><th>Actions</th></tr></thead>
     <tbody>${list.map(p => `<tr>
       <td>${p.id}</td><td>${p.image} ${p.name}</td>
@@ -413,10 +396,9 @@ async function adminProducts() {
   };
 }
 async function adminOrders() {
-  const orders = await api('/admin/orders?debug=1');
+  const orders = await api('/admin/orders');
   if (!onRoute('admin')) return;
   $('#adminBody').innerHTML = `
-    <p class="muted" style="margin-top:0">All orders via <code>GET /api/admin/orders?debug=1</code>.</p>
     <table><thead><tr><th>Order</th><th>User</th><th>Items</th><th>Total</th><th>Status</th><th>Address</th></tr></thead>
     <tbody>${orders.map(o => `<tr>
       <td>#${o.id}</td><td>${o.userId}</td>
@@ -478,7 +460,6 @@ $('#checkoutBtn').onclick = async () => {
   const sub = cart.reduce((s, i) => s + i.price * i.qty, 0);
   const total = sub - sub * discountPct / 100;
   try {
-    // VULN (combined with server): client computes & sends the total; server trusts it.
     const o = await api('/orders', { method: 'POST', body: JSON.stringify({
       items: cart, total, coupon: appliedCoupon, address: (me && me.address) || '' }) });
     cart = []; discountPct = 0; appliedCoupon = null; saveCart(); renderCart(); closeCart();

@@ -23,10 +23,7 @@ app.use((req, res, next) => {
 });
 
 // =====================================================================
-//  WEAK JWT  (VULN: weak secret + accepts alg:none + signature/exp not
-//  properly enforced). Implemented by hand so the flaws are explicit.
-// =====================================================================
-const JWT_SECRET = 'shop-secret-2021'; // VULN: weak, guessable, committed
+const JWT_SECRET = 'shop-secret-2021';
 
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const b64urlJSON = (obj) => b64url(JSON.stringify(obj));
@@ -46,12 +43,10 @@ function verifyToken(token) {
     const [h, p, s] = token.split('.');
     const header = JSON.parse(fromB64url(h));
     const payload = JSON.parse(fromB64url(p));
-    // VULN: "none" algorithm accepted — forge any token with no signature.
     if (header.alg === 'none') return payload;
     const expected = crypto.createHmac('sha256', JWT_SECRET).update(h + '.' + p).digest('base64')
       .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     if (expected !== s) return null;
-    // VULN: expiry is decoded but never enforced -> tokens never really expire.
     return payload;
   } catch (e) {
     return null;
@@ -103,8 +98,6 @@ function authenticate(req, res, next) {
   if (!token) { req.user = null; return next(); }
   const payload = verifyToken(token);
   if (payload) {
-    // VULN: role is taken straight from the (forgeable) token, never re-checked
-    // against the DB. Combined with alg:none this is full identity spoofing.
     req.user = { id: payload.sub, username: payload.username, role: payload.role };
   } else {
     req.user = null;
@@ -118,24 +111,32 @@ function requireLogin(req, res, next) {
   next();
 }
 
+// Enforces admin role from the authenticated session (no header/param bypass).
+function requireAdmin(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+  next();
+}
+
+// Enforces that the caller owns the resource (or is an admin).
+function requireOwner(resourceUserId, req) {
+  return req.user && (req.user.id == resourceUserId || req.user.role === 'admin');
+}
+
 // =====================================================================
 //  AUTHENTICATION ENDPOINTS
 // =====================================================================
 
-// VULN: user enumeration (distinct messages) + no rate limiting / lockout.
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   const user = db.users.find(u => u.username === username);
   if (!user) return res.status(401).json({ error: 'No account found with that username' });
   if (user.password !== password) return res.status(401).json({ error: 'Incorrect password for this user' });
   const token = signToken({ sub: user.id, username: user.username, role: user.role });
-  // VULN: token also dropped in a non-HttpOnly cookie (readable by JS -> XSS theft).
   res.setHeader('Set-Cookie', `token=${token}; Path=/; SameSite=Lax`);
   res.json({ token, user: sanitize(user) });
 });
 
-// VULN: mass assignment — attacker can set "role" at registration -> instant admin.
-//       Also user-enumeration on duplicate username/email.
 app.post('/api/register', (req, res) => {
   const body = req.body || {};
   if (db.users.find(u => u.username === body.username))
@@ -146,7 +147,7 @@ app.post('/api/register', (req, res) => {
     balance: 0,
     cardLast4: null,
     resetToken: null,
-    ...body, // VULN: spreads client input AFTER defaults -> role/balance overridable
+    ...body,
   };
   db.users.push(user);
   const token = signToken({ sub: user.id, username: user.username, role: user.role });
@@ -154,18 +155,14 @@ app.post('/api/register', (req, res) => {
   res.status(201).json({ token, user: sanitize(user) });
 });
 
-// VULN: predictable reset token (derived from id) AND it's returned in the
-//       response body instead of being emailed privately.
 app.post('/api/forgot-password', (req, res) => {
   const { email } = req.body || {};
   const user = db.users.find(u => u.email === email);
-  if (!user) return res.status(404).json({ error: 'No user with that email' }); // enumeration
+  if (!user) return res.status(404).json({ error: 'No user with that email' });
   user.resetToken = 'reset-' + user.id + '-' + new Date().toISOString().slice(0, 10);
   res.json({ message: 'Reset link generated', resetToken: user.resetToken });
 });
 
-// VULN: reset accepts any matching token with no ownership/identity binding,
-//       no expiry, and no old-password check.
 app.post('/api/reset-password', (req, res) => {
   const { token, newPassword } = req.body || {};
   const user = db.users.find(u => u.resetToken && u.resetToken === token);
@@ -185,29 +182,23 @@ app.get('/api/me', requireLogin, (req, res) => {
 //  USER ENDPOINTS
 // =====================================================================
 
-// VULN: BROKEN FUNCTION-LEVEL AUTHZ — any logged-in user lists ALL users
-//       (full PII dump). No admin check.
 app.get('/api/users', requireLogin, (req, res) => {
   res.json(db.users.map(sanitize));
 });
 
-// VULN: IDOR — fetch ANY user's profile by id, no ownership check.
 app.get('/api/users/:id', requireLogin, (req, res) => {
   const user = db.users.find(u => u.id == req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json(sanitize(user));
 });
 
-// VULN: IDOR + mass assignment — update ANY user and set role/balance freely.
 app.put('/api/users/:id', requireLogin, (req, res) => {
   const user = db.users.find(u => u.id == req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  Object.assign(user, req.body); // VULN: no field whitelist, no ownership check
+  Object.assign(user, req.body);
   res.json(sanitize(user));
 });
 
-// VULN: horizontal privilege escalation — change ANY user's password with no
-//       current-password verification and no ownership check.
 app.post('/api/users/:id/change-password', requireLogin, (req, res) => {
   const user = db.users.find(u => u.id == req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -225,8 +216,6 @@ app.get('/api/products/:id', (req, res) => {
   res.json(p);
 });
 
-// VULN: BROKEN FUNCTION-LEVEL AUTHZ — product create/update/delete have no
-//       admin (or even login) checks. Any visitor can edit the catalog.
 app.post('/api/products', (req, res) => {
   const p = { id: Math.max(...db.products.map(x => x.id)) + 1, stock: 0, rating: 0, image: '📦', ...req.body };
   db.products.push(p);
@@ -246,7 +235,6 @@ app.delete('/api/products/:id', (req, res) => {
 // =====================================================================
 //  COUPONS
 // =====================================================================
-// VULN: enumerable — returns full coupon incl. staff-only codes & notes.
 app.get('/api/coupons/:code', (req, res) => {
   const c = db.coupons.find(c => c.code.toLowerCase() === String(req.params.code).toLowerCase());
   if (!c) return res.status(404).json({ error: 'Invalid coupon' });
@@ -257,15 +245,13 @@ app.get('/api/coupons/:code', (req, res) => {
 //  ORDERS
 // =====================================================================
 
-// VULN: price trusted from client — server does NOT recompute totals from the
-//       catalog, so cart items/prices/total can be tampered (business-logic authz).
 app.post('/api/orders', requireLogin, (req, res) => {
   const { items, total, address, coupon } = req.body || {};
   const order = {
     id: nextOrderId++,
     userId: req.user.id,
     items: items || [],
-    total: total,            // VULN: taken verbatim from the request
+    total: total,
     status: 'processing',
     address: address || '',
     coupon: coupon || null,
@@ -275,21 +261,17 @@ app.post('/api/orders', requireLogin, (req, res) => {
   res.status(201).json(order);
 });
 
-// VULN: ?userId= override lets you read ANY user's order history; with no
-//       param it (correctly) scopes to you — the override is the bug.
 app.get('/api/orders', requireLogin, (req, res) => {
   const uid = req.query.userId || req.user.id;
   res.json(db.orders.filter(o => o.userId == uid));
 });
 
-// VULN: IDOR — any order by id, including other users' (exposes address/card).
 app.get('/api/orders/:id', requireLogin, (req, res) => {
   const o = db.orders.find(o => o.id == req.params.id);
   if (!o) return res.status(404).json({ error: 'Order not found' });
   res.json(o);
 });
 
-// VULN: IDOR invoice download, no ownership check.
 app.get('/api/orders/:id/invoice', requireLogin, (req, res) => {
   const o = db.orders.find(o => o.id == req.params.id);
   if (!o) return res.status(404).json({ error: 'Order not found' });
@@ -305,8 +287,6 @@ app.get('/api/orders/:id/invoice', requireLogin, (req, res) => {
 //  ADMIN ENDPOINTS
 // =====================================================================
 
-// VULN: VERTICAL privilege escalation via trusting a client header instead of
-//       the authenticated role. Sending "X-Admin: true" is enough.
 app.get('/api/admin/stats', (req, res) => {
   const isAdmin = req.headers['x-admin'] === 'true' || (req.user && req.user.role === 'admin');
   if (!isAdmin) return res.status(403).json({ error: 'Admins only' });
@@ -318,33 +298,89 @@ app.get('/api/admin/stats', (req, res) => {
   });
 });
 
-// VULN: admin user list guarded only by a bypassable query param (?debug=1),
-//       and leaks plaintext passwords.
 app.get('/api/admin/users', (req, res) => {
   const ok = req.query.debug === '1' || (req.user && req.user.role === 'admin');
   if (!ok) return res.status(403).json({ error: 'Admins only' });
-  res.json(db.users); // VULN: returns password + resetToken fields too
+  res.json(db.users);
 });
 
-// VULN: full order list (all users) with only a bypassable query-param guard.
 app.get('/api/admin/orders', (req, res) => {
   const ok = req.query.debug === '1' || (req.user && req.user.role === 'admin');
   if (!ok) return res.status(403).json({ error: 'Admins only' });
   res.json(db.orders);
 });
 
-// VULN: dangerous admin action (delete user) with NO server-side authz at all —
-//       the UI just hides the button. Classic "security by obscurity".
 app.delete('/api/admin/users/:id', (req, res) => {
   db.users = db.users.filter(u => u.id != req.params.id);
   res.json({ message: 'user removed' });
 });
 
-// VULN: promote any user to admin, no authz.
 app.post('/api/admin/users/:id/promote', (req, res) => {
   const u = db.users.find(u => u.id == req.params.id);
   if (!u) return res.status(404).json({ error: 'Not found' });
   u.role = 'admin';
+  res.json(sanitize(u));
+});
+
+// =====================================================================
+//  SECURE ENDPOINTS  (authorization is enforced correctly here — these are
+//  the "negative controls": a tester probing them should get 401/403, not data.
+//  They are what the storefront UI actually uses for normal account actions.)
+// =====================================================================
+
+// Returns ONLY the caller's own profile; ignores any client-supplied id.
+app.get('/api/account', requireLogin, (req, res) => {
+  const user = db.users.find(u => u.id == req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json(sanitize(user));
+});
+
+// Updates the caller's own account; whitelists editable fields (no role/balance).
+app.patch('/api/account', requireLogin, (req, res) => {
+  const user = db.users.find(u => u.id == req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  for (const k of ['fullName', 'phone', 'address', 'email']) {
+    if (k in (req.body || {})) user[k] = req.body[k];
+  }
+  res.json(sanitize(user));
+});
+
+// Changes the caller's own password; requires the current password.
+app.post('/api/account/password', requireLogin, (req, res) => {
+  const user = db.users.find(u => u.id == req.user.id);
+  const { currentPassword, newPassword } = req.body || {};
+  if (!user || user.password !== currentPassword)
+    return res.status(403).json({ error: 'Current password is incorrect' });
+  if (!newPassword || String(newPassword).length < 6)
+    return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  user.password = newPassword;
+  res.json({ message: 'Password updated' });
+});
+
+// Order status, but ownership-checked: you can only see your own orders.
+app.get('/api/account/orders/:id', requireLogin, (req, res) => {
+  const o = db.orders.find(o => o.id == req.params.id);
+  if (!o) return res.status(404).json({ error: 'Order not found' });
+  if (!requireOwner(o.userId, req)) return res.status(403).json({ error: 'This order does not belong to you' });
+  res.json(o);
+});
+
+// Admin-only audit log — role enforced from the session, no header/param bypass.
+app.get('/api/admin/audit-log', requireAdmin, (req, res) => {
+  res.json([
+    { ts: '2026-10-19T08:41:00Z', actor: 'admin', action: 'auth.login' },
+    { ts: '2026-10-20T10:03:00Z', actor: 'admin', action: 'product.price.update', target: 'product:103' },
+    { ts: '2026-10-20T14:22:00Z', actor: 'manager', action: 'order.status.update', target: 'order:5002' },
+  ]);
+});
+
+// Admin-only: properly whitelisted role change (role enforced, valid roles only).
+app.post('/api/admin/users/:id/role', requireAdmin, (req, res) => {
+  const u = db.users.find(u => u.id == req.params.id);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  const role = (req.body || {}).role;
+  if (!['user', 'manager', 'admin'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  u.role = role;
   res.json(sanitize(u));
 });
 
