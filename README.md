@@ -59,17 +59,6 @@ docker compose restart         # reset dữ liệu
 docker compose down            # tắt & xoá container
 ```
 
-### Cách 3 — Node.js trực tiếp (không Docker)
-
-Yêu cầu: Node.js ≥ 18.
-
-```bash
-cd vuln-shop-lab
-npm install
-npm start
-# mở http://localhost:3000
-```
-
 ## Tài khoản mẫu
 
 | Username  | Password          | Role    |
