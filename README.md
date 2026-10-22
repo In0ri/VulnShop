@@ -12,6 +12,57 @@ lỗ hổng và lời giải **không** nằm trong repo này.
 
 ## Chạy lab
 
+### Cách 1 — Docker (khuyến nghị)
+
+Yêu cầu: đã cài [Docker](https://docs.docker.com/engine/install/). Kiểm tra: `docker --version`.
+
+```bash
+cd vuln-shop-lab
+
+# 1) Build image từ Dockerfile (đặt tên là "vulnshop")
+docker build -t vulnshop .
+
+# 2) Chạy container, map cổng 3000 ra máy host
+docker run -d --name vulnshop-lab -p 3000:3000 vulnshop
+
+# 3) Mở trình duyệt: http://localhost:3000
+```
+
+Đổi cổng nếu 3000 đang bận (ví dụ chạy ở 8080): `docker run -d --name vulnshop-lab -p 8080:3000 vulnshop`
+
+**Các lệnh quản lý container:**
+
+```bash
+docker logs -f vulnshop-lab     # xem log (thấy request khi test)
+docker restart vulnshop-lab     # reset dữ liệu về trạng thái gốc (data lưu in-memory)
+docker stop vulnshop-lab        # tắt
+docker start vulnshop-lab       # bật lại
+docker rm -f vulnshop-lab       # xoá container
+docker rmi vulnshop             # xoá image (sau khi đã xoá container)
+```
+
+Sau khi sửa code, build lại rồi chạy container mới:
+
+```bash
+docker rm -f vulnshop-lab
+docker build -t vulnshop .
+docker run -d --name vulnshop-lab -p 3000:3000 vulnshop
+```
+
+### Cách 2 — Docker Compose
+
+```bash
+cd vuln-shop-lab
+docker compose up -d --build   # build + chạy nền
+docker compose logs -f         # xem log
+docker compose restart         # reset dữ liệu
+docker compose down            # tắt & xoá container
+```
+
+### Cách 3 — Node.js trực tiếp (không Docker)
+
+Yêu cầu: Node.js ≥ 18.
+
 ```bash
 cd vuln-shop-lab
 npm install
