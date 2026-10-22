@@ -33,17 +33,6 @@ docker run -d --name vulnshop-lab -p 3000:3000 vulnshop
 **Các lệnh quản lý container:**
 
 ```bash
-docker logs -f vulnshop-lab     # xem log (thấy request khi test)
-docker restart vulnshop-lab     # reset dữ liệu về trạng thái gốc (data lưu in-memory)
-docker stop vulnshop-lab        # tắt
-docker start vulnshop-lab       # bật lại
-docker rm -f vulnshop-lab       # xoá container
-docker rmi vulnshop             # xoá image (sau khi đã xoá container)
-```
-
-Sau khi sửa code, build lại rồi chạy container mới:
-
-```bash
 docker rm -f vulnshop-lab
 docker build -t vulnshop .
 docker run -d --name vulnshop-lab -p 3000:3000 vulnshop
